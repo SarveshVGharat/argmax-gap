@@ -1,0 +1,18 @@
+{
+  "row_id": 482262,
+  "game_id": "https://lichess.org/KwBjeBJt",
+  "ply_index": 36,
+  "fen_before": "r3r1k1/1p2qpp1/p1p2n2/8/PP1Pp1bp/2N1P1NP/2Q2PP1/1R3RK1 w - - 0 19",
+  "human_move_uci": "g3e2",
+  "human_move_san": "Nge2",
+  "maia3_top1_move_uci": "g3e4",
+  "maia3_top1_move_san": "Ngxe4",
+  "maia3_human_rank": 2,
+  "maia3_p_human": 0.3908316195011139,
+  "maia3_p_top1": 0.5342034697532654,
+  "allie_top1_move_uci": "h3g4",
+  "allie_top1_move_san": "hxg4",
+  "allie_human_rank": 2,
+  "allie_p_human": 0.35316526889801025,
+  "allie_p_top1": 0.40277695655822754
+}

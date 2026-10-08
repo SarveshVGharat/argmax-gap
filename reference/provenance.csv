@@ -1,0 +1,74 @@
+table,item,metric,value,unit
+29,source Allie 2022 blitz test split,rows_retained,1239353,count
+29,source Allie 2022 blitz test split,games_retained,18239,count
+29,source Allie 2022 blitz test split,rows_removed,0,count
+29,drop first 10 plies,rows_retained,1057010,count
+29,drop first 10 plies,games_retained,18146,count
+29,drop first 10 plies,rows_removed,182343,count
+29,stop each game at low pre-move clock,rows_retained,884049,count
+29,stop each game at low pre-move clock,games_retained,18138,count
+29,stop each game at low pre-move clock,rows_removed,172961,count
+29,parquet materialization and row-key validation,rows_retained,884049,count
+29,parquet materialization and row-key validation,games_retained,18138,count
+29,parquet materialization and row-key validation,rows_removed,0,count
+30,move_number,source_mean,21.452323914171345,raw
+30,move_number,retained_mean,20.74125868588732,raw
+30,move_number,standardized_mean_difference,-0.051646810062285026,raw
+30,time_spent_seconds,source_mean,4.731165374191211,raw
+30,time_spent_seconds,retained_mean,5.622593317791209,raw
+30,time_spent_seconds,standardized_mean_difference,0.13038904003628038,raw
+30,clock_before_seconds,source_mean,150.60310581408203,raw
+30,clock_before_seconds,retained_mean,157.54874673236438,raw
+30,clock_before_seconds,standardized_mean_difference,0.0896666879243851,raw
+30,num_legal_moves,source_mean,29.274515815913627,raw
+30,num_legal_moves,retained_mean,31.206459144232955,raw
+30,num_legal_moves,standardized_mean_difference,0.16295251963296878,raw
+30,phase/middlegame,source_share_percent,58.38376959591013,percent
+30,phase/middlegame,retained_share_percent,73.48698997453761,percent
+30,phase/middlegame,absolute_percentage_point_change,15.10322037862748,pp
+30,phase/opening,source_share_percent,29.11147994155015,percent
+30,phase/opening,retained_share_percent,20.174673575785956,percent
+30,phase/opening,absolute_percentage_point_change,-8.936806365764195,pp
+30,phase/endgame,source_share_percent,12.504750462539729,percent
+30,phase/endgame,retained_share_percent,6.338336449676432,percent
+30,phase/endgame,absolute_percentage_point_change,-6.166414012863298,pp
+31,selector_train,row_id_overlap,0,count
+31,selector_train,game_id_overlap,0,count
+31,selector_train,canonical_position_overlap,7755,count
+31,selector_train,context_position_overlap,0,count
+31,selector_val,row_id_overlap,0,count
+31,selector_val,game_id_overlap,0,count
+31,selector_val,canonical_position_overlap,2759,count
+31,selector_val,context_position_overlap,0,count
+31,calibration_fit,row_id_overlap,0,count
+31,calibration_fit,game_id_overlap,0,count
+31,calibration_fit,canonical_position_overlap,8989,count
+31,calibration_fit,context_position_overlap,0,count
+31,ensemble_weight_selection,row_id_overlap,0,count
+31,ensemble_weight_selection,game_id_overlap,0,count
+31,ensemble_weight_selection,canonical_position_overlap,8989,count
+31,ensemble_weight_selection,context_position_overlap,0,count
+31,refiner_train,row_id_overlap,0,count
+31,refiner_train,game_id_overlap,0,count
+31,refiner_train,canonical_position_overlap,7832,count
+31,refiner_train,context_position_overlap,0,count
+31,refiner_val,row_id_overlap,0,count
+31,refiner_val,game_id_overlap,0,count
+31,refiner_val,canonical_position_overlap,2648,count
+31,refiner_val,context_position_overlap,0,count
+F.4,test,rows,884049,count
+F.4,test,unique_games,18138,count
+F.4,test,unique_canonical_positions,870517,count
+F.4,test,canonical_positions_with_multiple_human_moves,4798,count
+32,maia3,rows,884049,count
+32,maia3,nonfinite_probability_rows,0,count
+32,maia3,nonfinite_logit_rows,0,count
+32,maia3,zero_human_move_probability_rows,0,count
+32,maia3,duplicate_legal_move_rows,0,count
+32,maia3,max_abs_probability_sum_error,3.5506980378130493e-07,raw
+32,allie,rows,884049,count
+32,allie,nonfinite_probability_rows,0,count
+32,allie,nonfinite_logit_rows,0,count
+32,allie,zero_human_move_probability_rows,0,count
+32,allie,duplicate_legal_move_rows,0,count
+32,allie,max_abs_probability_sum_error,3.803995696216589e-07,raw
