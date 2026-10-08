@@ -7,6 +7,8 @@ Code for reproducing the MAIA3–Allie experiments, tables, and figures. The two
 Use Python 3.11 and Git. A CUDA GPU is recommended for full policy inference; the smoke test supports CPU. Full searches and candidate tables require substantially more memory and disk than the smoke test.
 
 ```bash
+git clone https://github.com/SarveshVGharat/argmax-gap.git
+cd argmax-gap
 python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
@@ -23,13 +25,17 @@ The companion **`heldout.parquet`** contains the exact 500,000 development posit
 9a00544f74150ef8a5da156464becbccf99ea85a2af4b8f89fef1dc30fef1978
 ```
 
-This file is necessary for exact reproduction: the original parallel sampling process cannot be recovered from its seed alone. Unused player names, metadata, and duplicate history fields have been removed; retained values and row order are unchanged. It is supplied separately from the source code at `../argmax-gap-assets/heldout.parquet`.
+This file is necessary for exact reproduction: the original parallel sampling process cannot be recovered from its seed alone. Unused player names, metadata, and duplicate history fields have been removed; retained values and row order are unchanged. Download it from the [v1.0.0 release](https://github.com/SarveshVGharat/argmax-gap/releases/tag/v1.0.0).
 
-Fetch the official test data, frozen checkpoints, and pinned upstream implementations, and copy the companion file into the asset directory:
+Download the companion file, then fetch the official test data, frozen checkpoints, and pinned upstream implementations. The fetch script verifies the companion checksum:
 
 ```bash
+mkdir -p assets
+curl --fail --location \
+  https://github.com/SarveshVGharat/argmax-gap/releases/download/v1.0.0/heldout.parquet \
+  --output assets/heldout.parquet
 python scripts/fetch_assets.py --output-dir assets \
-  --heldout-file ../argmax-gap-assets/heldout.parquet
+  --heldout-file assets/heldout.parquet
 ```
 
 Sources and immutable revisions/checksums are defined in `argmax_gap/upstream.py`:
