@@ -446,9 +446,10 @@ def apply_refiner(frame, fitted):
     for i, (_, row) in enumerate(frame.iterrows()):
         temp = calibration_temperature_for_row(fitted["calibration"], row)
         p = softmax_temperature(row.get("legal_logits"), row.legal_probs, temp)
-        z = np.log(np.maximum(p, 1e-45))
         group = groups[i]
-        z[group.candidate_index.to_numpy(int)] += fitted["alpha"] * group.residual.to_numpy()
-        p = np.exp(z - z.max())
+        # Preserve the original float32 residual/exponential arithmetic and the
+        # calibrated probabilities outside the shortlist, including tiny tails.
+        p[group.candidate_index.to_numpy(int)] *= np.exp(
+            np.clip(fitted["alpha"] * group.residual.to_numpy(), -30.0, 30.0))
         probabilities.append(p / p.sum())
     return distribution_frame(frame, probabilities)

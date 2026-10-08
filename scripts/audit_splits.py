@@ -18,6 +18,7 @@ from itertools import zip_longest
 import json
 from pathlib import Path
 from typing import Any, Iterator
+from urllib.parse import urlparse
 
 import chess
 import numpy as np
@@ -41,6 +42,29 @@ def canonical_fen(fen: str) -> str:
     if len(fields) != 6:
         raise ValueError("Expected a complete six-field pre-move FEN")
     return " ".join(fields[:4])
+
+
+def canonical_game_id(value: Any) -> str:
+    """Identify the same Lichess game in URL and bare-ID source formats."""
+    text = str(value).strip()
+    candidate = "https://" + text if text.startswith(("lichess.org/", "www.lichess.org/")) else text
+    parsed = urlparse(candidate)
+    if parsed.hostname in {"lichess.org", "www.lichess.org"}:
+        return parsed.path.strip("/").split("/", 1)[0]
+    return text
+
+
+def target_ply(row: dict) -> int:
+    """Use a zero-based target index across the two original input schemas."""
+    if row.get("target_ply_index") is not None:
+        ply = int(row["target_ply_index"])
+        if row.get("previous_moves_uci") is not None and ply != len(as_list(row["previous_moves_uci"])):
+            raise ValueError("Target ply disagrees with complete move prefix")
+        return ply
+    if row.get("previous_moves_uci") is not None:
+        return len(as_list(row["previous_moves_uci"]))
+    # The original official test parquet already uses zero-based ply_index.
+    return int(row["ply_index"])
 
 
 def records(path: Path, columns: list[str] | None = None) -> Iterator[dict]:
@@ -84,12 +108,12 @@ def scan_split(path: Path, name: str) -> Split:
     available = set(pq.ParquetFile(path).schema_arrow.names)
     if missing := required - available:
         raise ValueError(f"{name}: missing columns {sorted(missing)}")
-    wanted = sorted(required | ({"past_fens"} & available))
+    wanted = sorted(required | ({"past_fens", "target_ply_index", "previous_moves_uci"} & available))
     split = Split(name, [], [], [], [], [], [], Counter())
     for index, row in enumerate(records(path, wanted)):
         if any(row[key] is None for key in required):
             raise ValueError(f"{name}: null required field at row {index}")
-        game, ply, target = str(row["game_id"]), int(row["ply_index"]), str(row["human_move_uci"])
+        game, ply, target = canonical_game_id(row["game_id"]), target_ply(row), str(row["human_move_uci"])
         fen = canonical_fen(str(row["fen_before"]))
         board = chess.Board(str(row["fen_before"]))
         legal = [str(move) for move in as_list(row["legal_moves_uci"])]
@@ -135,6 +159,7 @@ def audit_predictions(dataset: Path, predictions: Path, tolerance: float = 1e-5)
     seen: set[int] = set()
     maximum_error = 0.0
     rows = 0
+    statistics: Counter = Counter()
     optional = {"game_id", "p_human", "p_top1", "top1_move_uci", "human_rank", "legal_logits"} & available
     source = records(dataset, ["game_id", "human_move_uci", "legal_moves_uci"])
     for index, (row, pred) in enumerate(zip_longest(source, records(predictions, sorted(required | optional)))):
@@ -151,7 +176,15 @@ def audit_predictions(dataset: Path, predictions: Path, tolerance: float = 1e-5)
             issues["game_id_mismatch"] += int(pred["game_id"] != row["game_id"])
         moves = [str(move) for move in as_list(pred["legal_moves_uci"])]
         probs = np.asarray(as_list(pred["legal_probs"]), dtype=np.float64)
-        issues["duplicate_legal_moves"] += int(len(moves) != len(set(moves)))
+        duplicate_moves = int(len(moves) != len(set(moves)))
+        issues["duplicate_legal_moves"] += duplicate_moves
+        statistics["duplicate_legal_move_rows"] += duplicate_moves
+        statistics["nonfinite_probability_rows"] += int(not np.isfinite(probs).all())
+        scores = np.asarray(as_list(pred["legal_logits"]), dtype=np.float64) if "legal_logits" in pred else probs
+        if "legal_logits" in pred:
+            statistics["logit_rows_checked"] += 1
+            statistics["nonfinite_logit_rows"] += int(not np.isfinite(scores).all())
+            issues["invalid_logits"] += int(scores.shape != probs.shape or not np.isfinite(scores).all())
         issues["legal_set_mismatch"] += int(set(moves) != set(as_list(row["legal_moves_uci"])))
         if not moves or probs.shape != (len(moves),):
             issues["probability_shape"] += 1
@@ -168,6 +201,7 @@ def audit_predictions(dataset: Path, predictions: Path, tolerance: float = 1e-5)
             continue
         human_p = float(probs[moves.index(target)])
         issues["zero_human_probability"] += int(human_p == 0.0)
+        statistics["zero_human_move_probability_rows"] += int(human_p == 0.0)
         for field, expected in [("p_human", human_p), ("p_top1", float(probs.max()))]:
             if field in pred:
                 issues[field + "_mismatch"] += int(not np.isclose(float(pred[field]), expected, atol=tolerance, rtol=0))
@@ -175,13 +209,16 @@ def audit_predictions(dataset: Path, predictions: Path, tolerance: float = 1e-5)
             move = pred["top1_move_uci"]
             issues["top1_mismatch"] += int(move not in moves or probs[moves.index(move)] != probs.max())
         if "human_rank" in pred:
-            scores = np.asarray(as_list(pred["legal_logits"]), dtype=np.float64) if "legal_logits" in pred else probs
-            if scores.shape != probs.shape or not np.isfinite(scores).all():
-                issues["invalid_logits"] += 1
-            else:
+            if scores.shape == probs.shape and np.isfinite(scores).all():
                 expected_rank = 1 + int((scores > scores[moves.index(target)]).sum())
                 issues["rank_mismatch"] += int(int(pred["human_rank"]) != expected_rank)
-    return {"rows": rows, "max_probability_sum_error": maximum_error, "issues": dict(+issues)}
+    return {"rows": rows, "max_probability_sum_error": maximum_error,
+            "max_abs_probability_sum_error": maximum_error,
+            "nonfinite_probability_rows": statistics["nonfinite_probability_rows"],
+            "nonfinite_logit_rows": statistics["nonfinite_logit_rows"] if "legal_logits" in available else None,
+            "zero_human_move_probability_rows": statistics["zero_human_move_probability_rows"],
+            "duplicate_legal_move_rows": statistics["duplicate_legal_move_rows"],
+            "logit_rows_checked": statistics["logit_rows_checked"], "issues": dict(+issues)}
 
 
 def selector_indices(path: Path, total: int, family: str = "selector") -> tuple[np.ndarray, np.ndarray]:
@@ -219,6 +256,12 @@ def build_report(args: argparse.Namespace) -> dict:
             if prediction is not None:
                 predictions[f"{split_name}_{model}"] = audit_predictions(path, prediction)
     summaries = {split.name: split.summary() for split in splits}
+    # Calibration and ensemble selection use this same complete development
+    # sample; expose both Table 31 labels without rescanning or copying rows.
+    full_development_overlap = comparisons[0]
+    for name in ("calibration_fit", "ensemble_weight_selection"):
+        summaries[name] = dict(summaries["heldout"])
+        comparisons.append({**full_development_overlap, "second": name})
     passed = not any(summary["issues"] or summary["duplicate_row_keys"] for summary in summaries.values())
     passed = passed and not any(row["row_overlap"] or row["game_overlap"] for row in comparisons if row["first"] == "test")
     passed = passed and not any(result["issues"] for result in predictions.values())
@@ -226,13 +269,16 @@ def build_report(args: argparse.Namespace) -> dict:
         "passed": bool(passed), "splits": summaries, "overlaps": comparisons,
         "predictions": predictions,
         "definitions": {
-            "row": "game_id, ply_index, human_move_uci",
+            "game_id": "Lichess URLs and bare IDs normalized to the same case-sensitive game ID",
+            "target_ply": "zero-based target_ply_index, otherwise complete prefix length, otherwise original test ply_index",
+            "row": "normalized game_id, zero-based target ply, human_move_uci",
             "canonical_position": "first four FEN fields",
             "game_context": "game_id, ply_index, canonical_position",
             "stored_history_context": "canonical_position plus stored past_fens; not necessarily the complete game history",
             "independence": "test shares no row or game with development; repeated cross-game positions are allowed",
             "selector_train_validation": "disjoint rows; game overlap reported, as the paper uses a row split",
             "refiner_train_validation": "disjoint rows; game overlap reported, as the paper uses a row split",
+            "calibration_and_ensemble": "calibration_fit and ensemble_weight_selection both alias the full heldout sample",
             "prediction_alignment": "ordered row_id equals source row ordinal; legal move order may differ",
         },
     }

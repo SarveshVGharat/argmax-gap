@@ -8,7 +8,17 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
-from .metrics import summarize, ece, paired_top1, paired_mean_ci, clustered_ci
+from .metrics import summarize, ece, paired_top1, paired_mean_ci, paired_poisson_cis, clustered_ci, comparison_seed
+
+
+PROBABILITY_COMPARISONS = {
+    'maia3_time_bucket_calibration': 'MAIA3 calibrated vs MAIA3 base',
+    'maia3_refiner': 'MAIA3 trust-region vs MAIA3 base',
+    'allie_time_bucket_calibration': 'Allie calibrated vs Allie base',
+    'allie_refiner': 'Allie trust-region vs Allie base',
+    'ensemble_convex': 'convex ensemble vs MAIA3 base',
+    'ensemble_geometric': 'geometric ensemble vs MAIA3 base',
+}
 
 
 def load_predictions(path, batch_size=4096):
@@ -71,7 +81,8 @@ def strata(positions, maia):
     entropy_labels = entropy_bins.cat.rename_categories([f'Q{i+1}' for i in range(len(entropy_bins.cat.categories))])
     result = {
         "move_time": cut(t, [1, 2, 4, 7], ["[0,1]", "(1,2]", "(2,4]", "(4,7]", "(7,inf)"]),
-        "fixed_seconds": cut(t, [2, 5, 10, 20], ["[0,2]", "(2,5]", "(5,10]", "(10,20]", "(20,inf)"]),
+        "fixed_seconds": cut(t, [2, 4, 6, 8, 10, 15, 30],
+                             ["[0,2]", "(2,4]", "(4,6]", "(6,8]", "(8,10]", "(10,15]", "(15,30]", "(30,inf)"]),
         "phase": cut(positions.move_number, [10, 40], ["opening", "middlegame", "endgame"]),
         "legal_moves": cut(maia.num_legal_moves, [20, 30, 40, 60], ["1-20", "21-30", "31-40", "41-60", ">60"]),
         "rating": pd.cut(positions.player_elo, np.arange(600, 3400, 200), right=False),
@@ -126,8 +137,8 @@ def report(positions_path, maia_path, allie_path, output, methods=None, expected
         "both_wrong": int((~base_correct & ~allie_correct).sum()),
         "oracle_Top1": float(100 * (base_correct | allie_correct).mean())}
     (output / 'complementarity.json').write_text(json.dumps(overlap, indent=2) + '\n')
-    pairs = [{"method": 'allie', **paired_top1(base_correct, allie_correct)},
-             {"method": 'diagnostic_oracle', **paired_top1(base_correct, base_correct | allie_correct)}]
+    fixed_rng = np.random.default_rng(20260605)
+    pairs = [{"method": 'allie', **paired_top1(base_correct, allie_correct, rng=fixed_rng)}]
     fixed_predictions = {}
     for name, use_allie in {
         'max_probability': allie.p_top1.to_numpy() > maia.p_top1.to_numpy(),
@@ -136,8 +147,10 @@ def report(positions_path, maia_path, allie_path, output, methods=None, expected
     }.items():
         correctness = np.where(use_allie, allie_correct, base_correct)
         fixed_predictions[name] = correctness
-        pairs.append({"method": name, "Top1": 100 * correctness.mean(), **paired_top1(base_correct, correctness)})
+        pairs.append({"method": name, "Top1": 100 * correctness.mean(), **paired_top1(base_correct, correctness, rng=fixed_rng)})
+    pairs.append({"method": 'diagnostic_oracle', **paired_top1(base_correct, base_correct | allie_correct, rng=fixed_rng)})
     changes, rank_changes = [], []
+    refiner_rng = np.random.default_rng(20260606)
     for name, frame in models.items():
         if name in ('maia3', 'allie'):
             continue
@@ -146,6 +159,10 @@ def report(positions_path, maia_path, allie_path, output, methods=None, expected
         correct = frame.human_rank.to_numpy() == 1
         delta = correct.astype(float) - (reference.human_rank.to_numpy() == 1)
         pair = {"method": name, "reference": reference_name, **paired_top1(reference.human_rank == 1, correct)}
+        poisson = None
+        if name in ('allie_refiner', 'maia3_refiner'):
+            poisson = paired_poisson_cis({'Top1': delta, 'NLL': frame.nll.to_numpy() - reference.nll.to_numpy()}, rng=refiner_rng)
+            pair.update(ci_low_pp=100 * poisson['Top1']['ci_low'], ci_high_pp=100 * poisson['Top1']['ci_high'])
         if bootstrap_reps:
             pair.update({k + '_pp': 100 * v for k, v in clustered_ci(delta, positions.game_id, reps=bootstrap_reps).items()})
         pairs.append(pair)
@@ -153,15 +170,20 @@ def report(positions_path, maia_path, allie_path, output, methods=None, expected
             'rank_improved': int((frame.human_rank < reference.human_rank).sum()),
             'rank_worsened': int((frame.human_rank > reference.human_rank).sum()),
             'rank_unchanged': int((frame.human_rank == reference.human_rank).sum()),
-            'top1_in': pair['rescues'], 'top1_out': pair['breaks']})
+            'top1_in': pair['rescues'], 'top1_out': pair['breaks'],
+            'top5_in': int(((reference.human_rank > 5) & (frame.human_rank <= 5)).sum()),
+            'top5_out': int(((reference.human_rank <= 5) & (frame.human_rank > 5)).sum())})
         for metric, difference in {
             'NLL': frame.nll.to_numpy() - reference.nll.to_numpy(),
             'MRR': 1 / frame.human_rank.to_numpy() - 1 / reference.human_rank.to_numpy(),
             'NDCG@5': np.where(frame.human_rank <= 5, 1 / np.log2(frame.human_rank + 1), 0) - np.where(reference.human_rank <= 5, 1 / np.log2(reference.human_rank + 1), 0),
         }.items():
             row = {"method": name, "reference": reference_name, "metric": metric, **paired_mean_ci(difference)}
+            if metric == 'NLL' and poisson is not None:
+                row.update(poisson['NLL'])
             if bootstrap_reps:
-                row.update(clustered_ci(difference, positions.game_id, reps=bootstrap_reps))
+                seed = comparison_seed(PROBABILITY_COMPARISONS.get(name, name), metric)
+                row.update(clustered_ci(difference, positions.game_id, reps=bootstrap_reps, seed=seed))
             changes.append(row)
     if methods is not None:
         for path in sorted((Path(methods) / 'predictions').glob('*.parquet')):
@@ -175,15 +197,20 @@ def report(positions_path, maia_path, allie_path, output, methods=None, expected
                 correct = np.where(switch, correct, reference.human_rank.to_numpy() == 1)
             if 'correct_top1' in frame and not np.array_equal(correct, frame.correct_top1.to_numpy(dtype=bool)):
                 raise ValueError(f'Prediction correctness disagrees with targets and gate decisions: {path}')
+            nonlinear = path.stem.endswith(('_mlp', '_xgboost'))
+            gate = path.stem == 'maia3_rank2_gate'
+            method_seed = 20260711 if nonlinear else 20260701 if gate else 20260605
+            position_options = {'reps': 10000, 'seed': method_seed + 101} if nonlinear or gate else {}
             pair = {"method": path.stem, "reference": reference_name, "Top1": 100 * correct.mean(),
-                    **paired_top1(reference.human_rank == 1, correct)}
+                    **paired_top1(reference.human_rank == 1, correct, **position_options)}
             if bootstrap_reps:
                 delta = correct.astype(float) - (reference.human_rank.to_numpy() == 1)
-                pair.update({k + '_pp': 100 * v for k, v in clustered_ci(delta, positions.game_id, reps=bootstrap_reps).items()})
+                game_seed = method_seed + 202 if nonlinear or gate else 20260711
+                pair.update({k + '_pp': 100 * v for k, v in clustered_ci(delta, positions.game_id, reps=bootstrap_reps, seed=game_seed).items()})
             pairs.append(pair)
             if reference_name == 'allie':
                 pairs.append({'method': path.stem, 'reference': 'maia3', 'Top1': 100 * correct.mean(),
-                              **paired_top1(base_correct, correct)})
+                              **paired_top1(base_correct, correct, **position_options)})
     pd.DataFrame(pairs).to_csv(output / 'paired_top1.csv', index=False)
     if changes:
         pd.DataFrame(changes).to_csv(output / 'paired_probability_metrics.csv', index=False)
@@ -221,8 +248,16 @@ def report(positions_path, maia_path, allie_path, output, methods=None, expected
             for metric, values in [('Top1', (frame.human_rank == 1).astype(float) * 100), ('NLL', frame.nll)]:
                 fast, slow = values[fastest].to_numpy(), values[slowest].to_numpy()
                 delta = float(slow.mean() - fast.mean())
-                se = np.sqrt(slow.var(ddof=1) / len(slow) + fast.var(ddof=1) / len(fast))
-                time_differences.append({'model': name, 'metric': metric, 'slow_minus_fast': delta,
+                if metric == 'Top1':
+                    # Two independent binomial proportions, expressed in percentage points.
+                    p_fast, p_slow = fast.mean() / 100, slow.mean() / 100
+                    se = 100 * np.sqrt(p_slow * (1 - p_slow) / len(slow) +
+                                       p_fast * (1 - p_fast) / len(fast))
+                else:
+                    se = np.sqrt(slow.var(ddof=1) / len(slow) + fast.var(ddof=1) / len(fast))
+                time_differences.append({'model': name, 'metric': metric,
+                    'fast_rows': len(fast), 'slow_rows': len(slow),
+                    'fast_mean': float(fast.mean()), 'slow_mean': float(slow.mean()), 'slow_minus_fast': delta,
                     'ci_low': delta - 1.959963984540054 * se, 'ci_high': delta + 1.959963984540054 * se})
         pd.DataFrame(time_differences).to_csv(output / 'time_differences.csv', index=False)
     for name, frame in models.items():
@@ -283,3 +318,14 @@ def plot_report(output):
         fig.tight_layout()
         fig.savefig(output / f'{scheme}.pdf')
         plt.close(fig)
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    for ax, scheme in zip(axes, ('phase', 'legal_moves')):
+        for name in ('maia3', 'allie'):
+            values = strata_frame.loc[(strata_frame.scheme == scheme) &
+                                      (strata_frame.model == name) & (strata_frame.stratum != '>60')]
+            ax.plot(values.stratum, values.gap_pp, marker='o', label=name)
+        ax.set(xlabel=scheme.replace('_', ' '), ylabel='Top5–Top1 gap (percentage points)')
+        ax.legend()
+    fig.tight_layout()
+    fig.savefig(output / 'stratified_gap.pdf')
+    plt.close(fig)

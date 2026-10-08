@@ -277,7 +277,12 @@ def sample_training_rows(y: np.ndarray, seed_offset: int) -> tuple[np.ndarray, d
     }
 
 
-def fit_mlp_selector(train, validation, task, *, smoke=False):
+def fit_mlp_selector(train, validation, task, *, linear_model=None, smoke=False):
+    """Search the MLP grid against the pre-move linear baseline on validation.
+
+    The original shortlist searches selected the existing linear head. Retain
+    that outcome explicitly instead of labeling a linear prediction as an MLP.
+    """
     torch.set_num_threads(8)
     torch.use_deterministic_algorithms(True)
     x = train[PREMOVE_FEATURES].to_numpy(np.float32)
@@ -285,15 +290,28 @@ def fit_mlp_selector(train, validation, task, *, smoke=False):
     vx = validation[PREMOVE_FEATURES].to_numpy(np.float32)
     vy = validation.candidate_correct.to_numpy(np.float32)
     best, best_row, rows = None, None, []
+    if linear_model is not None:
+        from .selectors import selector_scores
+        result = selection_metrics(candidate_selection(validation, selector_scores(validation, linear_model)),
+                                   reference_name=task)
+        best_row = {"task": task, "model_id": "existing_premove_linear_logistic",
+                    "model_family": "linear", **result}
+        rows.append(best_row)
+        best = {"kind": "linear", "model": linear_model, "model_id": best_row["model_id"]}
     for idx, config in enumerate(MLP_CONFIGS[:1] if smoke else MLP_CONFIGS):
         obj = train_mlp(x_full=x, y_full=y, x_val_loss=vx, y_val_loss=vy,
                         config=config, model_id=mlp_id(task, config),
                         seed_offset=1000 + 37 * idx + len(task))
         result = selection_metrics(candidate_selection(validation, mlp_scores(obj, validation)), reference_name=task)
-        row = {"task": task, "model_id": obj["model_id"], "model_family": "mlp", **config, **result}
+        row = {"task": task, "model_id": obj["model_id"], "model_family": "mlp", **config,
+               "epochs_run": obj["epochs_run"], "best_val_loss": obj["best_val_loss"],
+               "train_rows_used": obj["train_rows_used"], **result}
         rows.append(row)
         if best_row is None or select_best([best_row, row]) is row:
             best, best_row = obj, row
+    for row in rows:
+        row["selected_by_validation"] = row is best_row
+    best["validation"] = best_row
     return best, rows
 
 

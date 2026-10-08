@@ -119,13 +119,14 @@ Use `--families linear`, `mlp`, `xgboost`, `gates`, `calibration`, `refiner`, or
 ## Paper protocol
 
 - Test construction retains target plies 11 onward, and truncates each game at the first pre-move clock below 30 seconds. Exactly 30 seconds is retained. The result is 884,049 positions from 18,138 games. Clock corrections in the public source are preserved.
-- MAIA3 consumes the current board plus up to seven prior boards. Allie consumes the move prefix and prior move-time bits. The realized target move duration is excluded from both policy inputs. The development artifact lacks prior durations; its Allie prefixes use zero durations, matching the original experiment.
+- MAIA3 consumes the current board plus up to seven prior boards. Allie consumes move-prefix tokens, ratings, and time-control context. Earlier move durations are stored for tokenizer compatibility but masked out of its policy token IDs; missing development durations are filled with zeros. The realized target move duration is excluded from both policy inputs.
 - Selector fitting/validation uses a deterministic 400,000/100,000 row split with seed `20260605`. Refiner splitting uses seed `20260606`. These are disjoint row splits; games can occur in both fitting and validation. Test games are independent of all development games.
 - Primary selectors use 45 pre-move features. The rank-2 gate adds 20 pre-move features and switches only when its score is **strictly greater** than the validation-selected threshold. `--diagnostic-time` adds the three realized-duration features only to the separately named Table 15 diagnostic variants.
+- MLP searches include the linear baseline on all three selector tasks; `selected.json` identifies the selected method.
 - Standalone calibration uses the original fine temperature search. Refinement starts from its separately fitted coarse temperature calibration. Both use observed move-time buckets and are post-hoc diagnostics. Refiner fitting preserves the original candidate support, clipping, regularization, and residual-scale search.
 - Ensemble weights are selected by development NLL. The test alpha sweep is descriptive and does not select a method.
-- Top-k uses `1 + count(probability > human_probability)`, preserving ties. The gate preserves base correctness on unswitched rows. NLL/MRR/NDCG/ECE are recomputed from distributions; ECE columns are fractions, Top-k and deltas are percentages/percentage points.
-- Position intervals use the paper's paired bootstrap/normal calculations; game intervals resample entire games 10,000 times. Bootstrap endpoints can differ with RNG stream order; reference checks compare point estimates and counts.
+- Top-k uses strict-greater ranking: one plus the number of legal moves with a higher score than the human move, preserving ties. The gate preserves base correctness on unswitched rows. NLL/MRR/NDCG/ECE are recomputed from distributions; ECE columns are fractions, Top-k and deltas are percentages/percentage points.
+- Confidence intervals use the bootstrap or normal calculations specified for each comparison in the paper; game intervals resample entire games 10,000 times. Reference checks compare point estimates and counts.
 
 ## Result map
 
@@ -133,7 +134,7 @@ Use `--families linear`, `mlp`, `xgboost`, `gates`, `calibration`, `refiner`, or
 |---|---|
 | Tables 1, 5–7; Figure 2 | `metrics.csv`, `topk.pdf` |
 | Tables 2–3, 23–24; Figure 3 | `paired_top1.csv`, `complementarity.json`, `complementarity.pdf` |
-| Tables 4, 16–17, 19–22; Figures 4, 6, 8 | `strata.csv`, move-time/phase/legal-move PDFs |
+| Tables 4, 16–17, 19–22; Figures 4, 6, 8 | `strata.csv`, `move_time.pdf`, `fixed_seconds.pdf`, `stratified_gap.pdf` |
 | Tables 8–9; Figure 5 | `rank_geometry.csv`, `rank_geometry.pdf` |
 | Tables 10–14 | Source feature lists/search grids and `selected.json` |
 | Table 15 | Explicitly named duration-diagnostic and pre-move rows in `paired_top1.csv` |

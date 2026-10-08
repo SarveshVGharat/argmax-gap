@@ -77,6 +77,32 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(report["overlaps"][0]["game_overlap"], 1)
         self.assertEqual(report["overlaps"][0]["game_context_overlap"], 1)
 
+    def test_shared_game_url_and_bare_id_are_rejected(self):
+        self.test = self.write("test", [position("https://lichess.org/Ab12Cd34/black?x=1")])
+        development = position("Ab12Cd34")
+        development.update(ply_index=1, previous_moves_uci="")
+        self.heldout = self.write("heldout", [development])
+        report = audit.build_report(self.args())
+        self.assertFalse(report["passed"])
+        pair = report["overlaps"][0]
+        self.assertEqual((pair["game_overlap"], pair["row_overlap"], pair["game_context_overlap"]), (1, 1, 1))
+
+    def test_explicit_target_index_normalizes_one_based_metadata(self):
+        self.test = self.write("test", [position("https://lichess.org/Ab12Cd34")])
+        development = position("Ab12Cd34")
+        development.update(ply_index=1, target_ply_index=0)
+        self.heldout = self.write("heldout", [development])
+        report = audit.build_report(self.args())
+        self.assertFalse(report["passed"])
+        self.assertEqual(report["overlaps"][0]["row_overlap"], 1)
+
+    def test_target_index_disagreeing_with_prefix_is_rejected(self):
+        row = position()
+        row.update(target_ply_index=1, previous_moves_uci="")
+        self.test = self.write("test", [row])
+        with self.assertRaisesRegex(ValueError, "Target ply disagrees"):
+            audit.build_report(self.args())
+
     def test_duplicate_row_and_missing_legal_move_are_rejected(self):
         row = position()
         row["legal_moves_uci"].remove("e2e4")
@@ -101,6 +127,25 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(result["issues"]["invalid_probabilities"], 1)
         self.assertEqual(result["issues"]["target_mismatch"], 1)
         self.assertEqual(result["issues"]["row_id_order_mismatch"], 1)
+
+    def test_nonfinite_logits_are_counted_independently_of_probabilities_and_rank(self):
+        row = prediction(position())
+        row["legal_probs"][0] = float("nan")
+        row["legal_logits"] = [float("nan")] * len(row["legal_probs"])
+        del row["human_rank"]
+        path = self.write("predictions", [row])
+        result = audit.audit_predictions(self.test, path)
+        self.assertEqual(result["nonfinite_probability_rows"], 1)
+        self.assertEqual(result["nonfinite_logit_rows"], 1)
+        self.assertEqual(result["issues"]["invalid_logits"], 1)
+        self.assertEqual(result["logit_rows_checked"], 1)
+
+    def test_full_development_aliases_cover_calibration_and_ensembles(self):
+        report = audit.build_report(self.args())
+        for name in ("calibration_fit", "ensemble_weight_selection"):
+            self.assertEqual(report["splits"][name], report["splits"]["heldout"])
+            expected = {**report["overlaps"][0], "second": name}
+            self.assertIn(expected, report["overlaps"])
 
     def test_prediction_missing_rows_and_duplicate_ids_are_rejected(self):
         row = prediction(position())

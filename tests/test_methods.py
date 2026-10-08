@@ -121,6 +121,25 @@ class MethodTests(unittest.TestCase):
         for a, b in zip(expected.legal_probs, actual.legal_probs):
             np.testing.assert_allclose(a, b, atol=1e-15)
 
+    def test_refiner_preserves_distinct_tiny_tail_probabilities(self):
+        maia, _ = example_frames(1)
+        p = np.array([.5, .3, .15, .05, 1e-60, 1e-70])
+        maia.at[0, "human_move_uci"] = maia.at[0, "legal_moves_uci"][-1]
+        maia.at[0, "legal_probs"] = p
+        maia.at[0, "legal_logits"] = np.log(p)
+        maia.at[0, "p_human"] = p[-1]
+        maia.at[0, "is_top1"] = False
+        params = {"selected": "global", "global": {"temperature": .75}}
+        dimension = len(refinement.PREMOVE_FEATURES)
+        model = {"weights": np.zeros(dimension, np.float32), "bias": 0.,
+                 "mean": np.zeros(dimension, np.float32), "std": np.ones(dimension, np.float32),
+                 "feature_names": refinement.PREMOVE_FEATURES}
+        result = refinement.apply_refiner(maia, {"model": model, "calibration": params,
+            "base": "maia3", "topk": 5, "alpha": .05}).iloc[0]
+        expected = calibration.softmax_temperature(np.log(p), p, .75)
+        np.testing.assert_allclose(result.legal_probs, expected, rtol=1e-14, atol=0)
+        self.assertEqual(result.human_rank, 6)
+
     def test_alignment_rejects_duplicate_or_mismatched_legal_sets(self):
         maia, allie = example_frames()
         allie.loc[0, "row_id"] = 1

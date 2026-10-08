@@ -72,11 +72,13 @@ def train(args):
         features.write_candidate_parquet(val_path, maia, allie, task, va,
                                            diagnostic_time=args.diagnostic_time)
         validation = pd.read_parquet(val_path)
-        linear, rows = selectors.fit_selector(train_path, validation, task)
-        searches.extend({"family": "linear", **r} for r in rows)
-        selectors.save_model(out / "models" / f"{task}_linear.npz", linear)
-        models[f"{task}_linear"] = {"kind": "linear", "task": task, "model": linear}
-        selections[f"{task}_linear"] = linear["metadata"]
+        linear = None
+        if set(args.families) & {"linear", "mlp"}:
+            linear, rows = selectors.fit_selector(train_path, validation, task)
+            searches.extend({"family": "linear", **r} for r in rows)
+            selectors.save_model(out / "models" / f"{task}_linear.npz", linear)
+            models[f"{task}_linear"] = {"kind": "linear", "task": task, "model": linear}
+            selections[f"{task}_linear"] = linear["metadata"]
         if args.diagnostic_time:
             fitted, rows = selectors.fit_selector(train_path, validation, task, diagnostic_time=True)
             name = f"{task}_diagnostic_realized_duration"
@@ -88,12 +90,17 @@ def train(args):
             train_frame = pd.read_parquet(train_path)
         if set(args.families) & {"mlp", "xgboost"}:
             from argmax_gap import nonlinear
-            if "mlp" in args.families and task == "cross_model":
-                fitted, rows = nonlinear.fit_mlp_selector(train_frame, validation, nonlinear_task, smoke=args.smoke)
-                name = f"{task}_mlp"
-                nonlinear.save_mlp(out / "models" / f"{name}.pt", fitted)
-                models[name] = {"kind": "mlp", "task": task, "model": fitted}
-                selections[name] = {"config": fitted["config"], "model_id": fitted["model_id"]}
+            if "mlp" in args.families:
+                fitted, rows = nonlinear.fit_mlp_selector(train_frame, validation, nonlinear_task,
+                                                         linear_model=linear, smoke=args.smoke)
+                if fitted["kind"] == "mlp":
+                    name = f"{task}_mlp"
+                    nonlinear.save_mlp(out / "models" / f"{name}.pt", fitted)
+                    models[name] = {"kind": "mlp", "task": task, "model": fitted}
+                else:
+                    name = f"{task}_linear"
+                selections[f"{task}_mlp_search"] = {"selected_method": name,
+                                                      **fitted["validation"]}
                 searches.extend({"family": "mlp", **r} for r in rows)
             if "xgboost" in args.families:
                 fitted, rows = nonlinear.fit_xgboost_selector(train_frame, validation, nonlinear_task, smoke=args.smoke)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import hashlib
 import numpy as np
 
 
@@ -39,14 +40,15 @@ def summarize(frame):
     return result
 
 
-def paired_top1(base, alternative, reps=1000, seed=20260605):
+def paired_top1(base, alternative, reps=1000, seed=20260605, rng=None):
     base, alternative = np.asarray(base, dtype=bool), np.asarray(alternative, dtype=bool)
     if base.shape != alternative.shape or not base.size:
         raise ValueError("Paired outcomes must have the same nonzero shape")
     n = base.size
     rescues = int((~base & alternative).sum())
     breaks = int((base & ~alternative).sum())
-    counts = np.random.default_rng(seed).multinomial(n, np.array([rescues, breaks, n - rescues - breaks]) / n, size=reps)
+    rng = np.random.default_rng(seed) if rng is None else rng
+    counts = rng.multinomial(n, np.array([rescues, breaks, n - rescues - breaks]) / n, size=reps)
     low, high = np.quantile(100 * (counts[:, 0] - counts[:, 1]) / n, [0.025, 0.975])
     # Continuity-corrected McNemar statistic used by the paper.
     p = math.erfc(math.sqrt((abs(rescues - breaks) - 1) ** 2 / (2 * (rescues + breaks)))) if rescues + breaks else 1.0
@@ -65,14 +67,42 @@ def paired_mean_ci(difference):
             "ci_high": mean + 1.959963984540054 * se}
 
 
+def paired_poisson_cis(differences, reps=500, seed=20260606, rng=None):
+    """Paired Poisson intervals sharing position weights across the supplied metrics."""
+    arrays = {name: np.asarray(values, dtype=np.float64) for name, values in differences.items()}
+    if not arrays or len({len(values) for values in arrays.values()}) != 1:
+        raise ValueError("Expected aligned paired differences")
+    n = len(next(iter(arrays.values())))
+    if not n or reps < 1 or any(values.ndim != 1 or not np.isfinite(values).all() for values in arrays.values()):
+        raise ValueError("Expected nonempty finite differences and positive bootstrap replicates")
+    rng = np.random.default_rng(seed) if rng is None else rng
+    samples = {name: np.empty(reps) for name in arrays}
+    for replicate in range(reps):
+        weights = rng.poisson(1.0, size=n).astype(np.float64)
+        denominator = max(float(weights.sum()), 1.0)
+        for name, values in arrays.items():
+            samples[name][replicate] = np.sum(weights * values) / denominator
+    return {name: {'delta': float(values.mean()),
+                   'ci_low': float(np.quantile(samples[name], .025)),
+                   'ci_high': float(np.quantile(samples[name], .975))}
+            for name, values in arrays.items()}
+
+
+def comparison_seed(comparison, metric):
+    offset = int.from_bytes(hashlib.blake2b(f'{comparison}|{metric}'.encode('utf-8'), digest_size=4).digest(), 'little')
+    return 20260711 + offset
+
+
 def clustered_ci(difference, game_ids, reps=10000, seed=20260711):
     """Resample games, retaining all their rows and weighting by resampled rows."""
     difference = np.asarray(difference, dtype=float)
     if len(difference) != len(game_ids) or not len(difference) or not np.isfinite(difference).all():
         raise ValueError("Expected aligned finite differences and game identifiers")
-    _, inverse = np.unique(np.asarray(game_ids, dtype=str), return_inverse=True)
-    counts = np.bincount(inverse)
-    sums = np.bincount(inverse, weights=difference)
+    _, first, inverse = np.unique(np.asarray(game_ids, dtype=str), return_index=True, return_inverse=True)
+    # Preserve first-encounter game order, as in the paper's groupby(sort=False).
+    order = np.argsort(first)
+    counts = np.bincount(inverse)[order]
+    sums = np.bincount(inverse, weights=difference)[order]
     rng = np.random.default_rng(seed)
     samples = np.empty(reps)
     for start in range(0, reps, 100):
