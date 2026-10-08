@@ -114,7 +114,7 @@ python scripts/report.py --positions data/test.parquet \
 python scripts/check_reference.py --report runs/report --require-all
 ```
 
-Use `--families linear`, `mlp`, `xgboost`, `gates`, `calibration`, `refiner`, or `ensembles` to train selected families. Omit `--methods` from `report.py` for a base-policy report. The comparator checks available methods by default; `--require-all` also fails for missing paper methods. Different inference precision/hardware can change probabilities and close rankings; such discrepancies are reported, not hidden by copying reference values.
+Use `--families linear`, `mlp`, `xgboost`, `gates`, `calibration`, `refiner`, or `ensembles` to train selected families. Omit `--methods` from `report.py` for a base-policy report. The comparator checks available methods by default; `--require-all` also fails for missing paper methods. Inference precision and hardware can affect probabilities and close rankings; the reference checker reports discrepancies.
 
 ## Paper protocol
 
@@ -166,18 +166,3 @@ python scripts/filtering_sensitivity.py --source-jsonl assets/allie-test.jsonl \
   --retained data/test.parquet --output runs/report/filtering \
   --reference reference/provenance.csv
 ```
-
-## Validation performed for this release
-
-The cleaned code was exercised with the real local data and checkpoints:
-
-- All 40 unit tests passed, the package built and installed, and the documented CPU end-to-end smoke command completed.
-- Full test reconstruction and full test/development independence and legal-move audits.
-- Both real policies on small CPU test/development samples; identities, legal move order, ranks, and Top1 choices match the historical caches. CPU float32 probabilities differ slightly from the original GPU run.
-- Every downstream method family trained/evaluated on real 150-row samples, including multiple evaluation batches.
-- Full development cross-model logistic refit: preprocessing, weights, and bias match the original exactly.
-- All 884,049 cached test distributions re-evaluated: MAIA3 Top1 **57.254858%**, Allie **55.733902%**, oracle **61.796009%**, with matching Top-k, NLL, ECE, and fixed-selector counts.
-- The original selected rank-2 head evaluated using the cleaned features on all 884,049 positions: **14,176 rescues**, **12,969 breaks**, **47,193 switches**.
-- All 42 full ensemble sweep points match the original Top-k values; NLL differences are below `7e-14`. Full source replay also reproduces all 21 Table 30 reference values.
-
-Full GPU policy inference and all full nonlinear/refiner hyperparameter searches were not rerun in this CPU-only session. The supplied commands perform those runs; cached-result checks are distinct from fresh inference.
