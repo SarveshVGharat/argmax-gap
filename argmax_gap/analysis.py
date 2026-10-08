@@ -74,6 +74,46 @@ def check_alignment(base, other):
             raise ValueError(f"Prediction {key} differs between inputs")
 
 
+def method_output_paths(methods):
+    """Require explicit method inputs and every artifact declared by their manifest."""
+    paths = {'distributions': [], 'predictions': []}
+    if methods is None:
+        return paths
+    directory = Path(methods)
+    if not directory.is_dir():
+        raise ValueError(f"Methods directory does not exist or is not a directory: {directory}")
+    names = set()
+    for kind in paths:
+        paths[kind] = sorted((directory / kind).glob('*.parquet'))
+        for path in paths[kind]:
+            if not path.is_file():
+                raise ValueError(f"Method output is not a file: {path}")
+            if path.stem in names:
+                raise ValueError(f"Duplicate method output in predictions and distributions: {path.stem}")
+            if path.stem in {'maia3', 'allie'}:
+                raise ValueError(f"Method output conflicts with a base policy name: {path.stem}")
+            names.add(path.stem)
+    if not names:
+        raise ValueError(f"No method parquet outputs found in {directory / 'predictions'} or {directory / 'distributions'}")
+    manifest_path = directory / 'selected.json'
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+        if not isinstance(manifest, dict) or not isinstance(manifest.get('methods'), dict):
+            raise ValueError(f"Expected a methods mapping in {manifest_path}")
+        expected = set()
+        for name, selection in manifest['methods'].items():
+            if name.endswith('_mlp_search'):
+                selected = selection.get('selected_method') if isinstance(selection, dict) else None
+                if not isinstance(selected, str) or not selected:
+                    raise ValueError(f"Missing selected_method for {name} in {manifest_path}")
+                expected.add(selected)
+            else:
+                expected.add(name)
+        if missing := expected - names:
+            raise ValueError(f"Missing method outputs declared in {manifest_path}: {', '.join(sorted(missing))}")
+    return paths
+
+
 def strata(positions, maia):
     cut = lambda x, edges, labels: pd.cut(x, [-np.inf, *edges, np.inf], labels=labels, right=True)
     t = positions.time_spent_seconds.to_numpy()
@@ -101,6 +141,7 @@ def strata(positions, maia):
 
 
 def report(positions_path, maia_path, allie_path, output, methods=None, expected_rows=884049, bootstrap_reps=10000):
+    method_paths = method_output_paths(methods)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     position_columns = ['game_id', 'human_move_uci', 'time_spent_seconds', 'move_number',
@@ -121,11 +162,10 @@ def report(positions_path, maia_path, allie_path, output, methods=None, expected
     allie_correct = allie.human_rank.to_numpy() == 1
     disagreement = maia.top1_move_uci.to_numpy() != allie.top1_move_uci.to_numpy()
     models = {"maia3": maia, "allie": allie}
-    if methods is not None:
-        for path in sorted((Path(methods) / 'distributions').glob('*.parquet')):
-            frame = load_predictions(path)
-            check_alignment(maia, frame)
-            models[path.stem] = frame
+    for path in method_paths['distributions']:
+        frame = load_predictions(path)
+        check_alignment(maia, frame)
+        models[path.stem] = frame
     rows = []
     for name, frame in models.items():
         rows.append({"method": name, **summarize(frame),
@@ -186,7 +226,7 @@ def report(positions_path, maia_path, allie_path, output, methods=None, expected
                 row.update(clustered_ci(difference, positions.game_id, reps=bootstrap_reps, seed=seed))
             changes.append(row)
     if methods is not None:
-        for path in sorted((Path(methods) / 'predictions').glob('*.parquet')):
+        for path in method_paths['predictions']:
             frame = pq.read_table(path).to_pandas()
             check_alignment(maia, frame)
             reference_name = 'allie' if path.stem.startswith('allie') else 'maia3'
